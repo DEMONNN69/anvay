@@ -46,8 +46,91 @@ class ComplianceCheckCreateSerializer(serializers.ModelSerializer):
     
     def _process_image(self, compliance_check):
         """
-        Mock function to simulate image processing and compliance checking.
-        In production, this would use OCR libraries and actual compliance rules.
+        Process image using OCR and compliance field detection.
+        Falls back to mock processing if OCR is not available.
+        """
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Try to use real OCR
+            from .ocr_utils import OCREngine, ComplianceTextProcessor
+            
+            # Initialize OCR engine and text processor
+            ocr_engine = OCREngine()
+            text_processor = ComplianceTextProcessor()
+            
+            # Extract text from uploaded image
+            image_path = compliance_check.image.path
+            extracted_text = ocr_engine.extract_text_from_image(image_path)
+            compliance_check.extracted_text = extracted_text
+            
+            # Extract compliance fields from the text
+            detected_fields_data = text_processor.extract_compliance_fields(extracted_text)
+            
+            # Get all active compliance fields from database
+            active_fields = ComplianceField.objects.filter(is_active=True)
+            
+            detected_count = 0
+            total_fields = active_fields.count()
+            
+            # Map field names to the format returned by ComplianceTextProcessor
+            field_mapping = {
+                'MRP': 'mrp',
+                'Net Quantity': 'net_quantity',
+                'Manufacturer': 'manufacturer',
+                'Country of Origin': 'country_origin',
+                'Manufacturing Date': 'manufacturing_date'
+            }
+            
+            # Process each compliance field
+            for field in active_fields:
+                mapped_name = field_mapping.get(field.name, field.name.lower().replace(' ', '_'))
+                detected = mapped_name in detected_fields_data
+                value = detected_fields_data.get(mapped_name) if detected else None
+                confidence = 0.8 if detected else 0.0
+                
+                if detected:
+                    detected_count += 1
+                
+                # Create DetectedField record
+                DetectedField.objects.create(
+                    compliance_check=compliance_check,
+                    field=field,
+                    detected=detected,
+                    value=value,
+                    confidence=confidence
+                )
+            
+            # Calculate compliance score
+            if total_fields > 0:
+                compliance_check.score = int((detected_count / total_fields) * 100)
+            else:
+                compliance_check.score = 0
+            
+            # Determine status based on score
+            if compliance_check.score >= 60:
+                compliance_check.status = 'pass'
+            elif compliance_check.score >= 40:
+                compliance_check.status = 'partial'
+            else:
+                compliance_check.status = 'fail'
+            
+            compliance_check.save()
+            logger.info(f"OCR processing completed. Score: {compliance_check.score}%, Status: {compliance_check.status}")
+            
+        except ImportError as e:
+            logger.warning(f"OCR libraries not available: {str(e)}. Using fallback processing.")
+            self._fallback_process_image(compliance_check)
+        except Exception as e:
+            logger.error(f"Error processing image with OCR: {str(e)}. Using fallback processing.")
+            self._fallback_process_image(compliance_check)
+    
+    def _fallback_process_image(self, compliance_check):
+        """
+        Fallback processing when OCR is not available.
+        Uses mock data for demonstration.
         """
         import random
         
