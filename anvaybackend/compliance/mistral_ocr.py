@@ -101,10 +101,38 @@ class MistralOCR:
         """
         import re
         
-        # Create keyword variations based on field name
-        field_keywords = self._get_field_keywords(field.name)
+        # Special handling for Manufacturing Date vs Manufacturer confusion
+        if 'manufacturing' in field.name.lower() or 'date' in field.name.lower():
+            # Look specifically for date patterns with "mfg"
+            date_patterns = [
+                r'mfg[\.\s]*date\s*[:\-=]?\s*([^\n\r,;]+)',
+                r'manufacturing\s+date\s*[:\-=]?\s*([^\n\r,;]+)',
+                r'manufactured\s+on\s*[:\-=]?\s*([^\n\r,;]+)',
+                r'production\s+date\s*[:\-=]?\s*([^\n\r,;]+)'
+            ]
+            for pattern in date_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    value = match.group(1).strip()
+                    return True, value, 0.9
         
-        # Search for field patterns in text
+        elif 'manufacturer' in field.name.lower() and 'date' not in field.name.lower():
+            # Look for manufacturer patterns but exclude date patterns
+            manufacturer_patterns = [
+                r'manufactured\s+by\s*[:\-=]?\s*([^\n\r,;]+)',
+                r'manufacturer\s*[:\-=]?\s*([^\n\r,;]+)',
+                r'made\s+by\s*[:\-=]?\s*([^\n\r,;]+)',
+                r'producer\s*[:\-=]?\s*([^\n\r,;]+)'
+            ]
+            # Exclude if it contains date-related words
+            for pattern in manufacturer_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match and not re.search(r'\bdate\b', match.group(0), re.IGNORECASE):
+                    value = match.group(1).strip()
+                    return True, value, 0.9
+        
+        # Default keyword-based search for other fields
+        field_keywords = self._get_field_keywords(field.name)
         for keyword in field_keywords:
             # Case-insensitive search for the keyword
             pattern = rf'{re.escape(keyword)}\s*[:\-=]?\s*([^\n\r,;]+)'

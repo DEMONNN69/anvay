@@ -88,9 +88,9 @@ class ComplianceCheckCreateSerializer(serializers.ModelSerializer):
             field_keywords = {
                 'MRP': ['mrp', 'maximum retail price', 'm.r.p', 'price'],
                 'Net Quantity': ['net quantity', 'net content', 'net weight', 'net wt', 'quantity'],
-                'Manufacturer': ['manufacturer', 'mfg', 'manufactured by', 'made by'],
+                'Manufacturer': ['manufacturer', 'manufactured by', 'made by', "mfg by"],
                 'Country of Origin': ['country of origin', 'made in', 'origin'],
-                'Manufacturing Date': ['mfg date', 'manufacturing date', 'manufactured on', 'mfd']
+                'Manufacturing Date': ['mfg date', 'manufacturing date', 'manufactured on', 'mfd', "mfg", "MFG. Date"]
             }
             
             # Process each compliance field
