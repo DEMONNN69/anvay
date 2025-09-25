@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-4+z!#+9yg4chgcydzqyj&y4@q+6ws)qdd76ti_2%8)j3a_l(xq
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', 'musical-acorn-v6vw59v9vjv3rpx-8000.app.github.dev']
 
 
 # Application definition
@@ -150,9 +150,23 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
+    "https://musical-acorn-v6vw59v9vjv3rpx-8000.app.github.dev",
+    "https://musical-acorn-v6vw59v9vjv3rpx-5173.app.github.dev",  # Frontend Codespaces URL
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 
 # Media files
 MEDIA_URL = '/media/'

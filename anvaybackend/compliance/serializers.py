@@ -46,53 +46,79 @@ class ComplianceCheckCreateSerializer(serializers.ModelSerializer):
     
     def _process_image(self, compliance_check):
         """
-        Process image using OCR and compliance field detection.
-        Falls back to mock processing if OCR is not available.
+        Process image using Mistral AI OCR and compliance field detection.
+        Falls back to mock processing if Mistral OCR is not available.
         """
         import logging
         
         logger = logging.getLogger(__name__)
         
         try:
-            # Try to use real OCR
-            from .ocr_utils import OCREngine, ComplianceTextProcessor
-            
-            # Initialize OCR engine and text processor
-            ocr_engine = OCREngine()
-            text_processor = ComplianceTextProcessor()
-            
-            # Extract text from uploaded image
-            image_path = compliance_check.image.path
-            extracted_text = ocr_engine.extract_text_from_image(image_path)
-            compliance_check.extracted_text = extracted_text
-            
-            # Extract compliance fields from the text
-            detected_fields_data = text_processor.extract_compliance_fields(extracted_text)
+            # Use Mistral OCR
+            from .mistral_ocr import MistralOCR
             
             # Get all active compliance fields from database
             active_fields = ComplianceField.objects.filter(is_active=True)
             
+            # Extract text and structured data from uploaded image
+            image_path = compliance_check.image.path
+            mistral_ocr = MistralOCR()
+            ocr_result = mistral_ocr.extract_compliance_fields(image_path, active_fields)
+            
+            if not ocr_result.get('success', False):
+                logger.error(f"Mistral OCR failed: {ocr_result.get('error', 'Unknown error')}")
+                self._fallback_process_image(compliance_check)
+                return
+            
+            # Store the raw extracted text
+            compliance_check.extracted_text = ocr_result.get('raw_text', '')
+            
+            # Parse structured data (if available)
+            structured_data = ocr_result.get('structured_data', '')
+            logger.info(f"Mistral OCR structured data: {structured_data}")
+            
+            # Simple field detection using text matching for now
+            # TODO: Parse the structured JSON response from Mistral for better accuracy
+            extracted_text = compliance_check.extracted_text.lower()
+            
             detected_count = 0
             total_fields = active_fields.count()
             
-            # Map field names to the format returned by ComplianceTextProcessor
-            field_mapping = {
-                'MRP': 'mrp',
-                'Net Quantity': 'net_quantity',
-                'Manufacturer': 'manufacturer',
-                'Country of Origin': 'country_origin',
-                'Manufacturing Date': 'manufacturing_date'
+            # Field detection keywords
+            field_keywords = {
+                'MRP': ['mrp', 'maximum retail price', 'm.r.p', 'price'],
+                'Net Quantity': ['net quantity', 'net content', 'net weight', 'net wt', 'quantity'],
+                'Manufacturer': ['manufacturer', 'mfg', 'manufactured by', 'made by'],
+                'Country of Origin': ['country of origin', 'made in', 'origin'],
+                'Manufacturing Date': ['mfg date', 'manufacturing date', 'manufactured on', 'mfd']
             }
             
             # Process each compliance field
             for field in active_fields:
-                mapped_name = field_mapping.get(field.name, field.name.lower().replace(' ', '_'))
-                detected = mapped_name in detected_fields_data
-                value = detected_fields_data.get(mapped_name) if detected else None
-                confidence = 0.8 if detected else 0.0
+                keywords = field_keywords.get(field.name, [field.name.lower()])
+                detected = any(keyword in extracted_text for keyword in keywords)
+                
+                # Try to extract value near the keyword
+                value = None
+                confidence = 0.0
                 
                 if detected:
                     detected_count += 1
+                    confidence = 0.85
+                    # Simple value extraction - look for text after the keyword
+                    for keyword in keywords:
+                        if keyword in extracted_text:
+                            try:
+                                start_idx = extracted_text.find(keyword)
+                                # Get text after the keyword (next 50 characters)
+                                text_after = compliance_check.extracted_text[start_idx:start_idx+100]
+                                # Extract the line containing the keyword
+                                lines = text_after.split('\n')
+                                if lines:
+                                    value = lines[0].strip()
+                                break
+                            except:
+                                value = f"Found near: {keyword}"
                 
                 # Create DetectedField record
                 DetectedField.objects.create(

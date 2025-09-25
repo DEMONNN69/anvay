@@ -10,40 +10,39 @@ from pdf2image import convert_from_path
 import os
 import tempfile
 import logging
-# Explicit Tesseract configuration
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 import re
 from typing import Tuple, Optional, List
 
 logger = logging.getLogger(__name__)
 
-# Configure Tesseract path for Windows - Force set the correct path
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# Backup configuration paths
+# Configure Tesseract path for Linux/Codespaces
 TESSERACT_PATHS = [
-    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-    r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-    r'C:\Users\{}\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'.format(os.getenv('USERNAME', '')),
+    '/usr/bin/tesseract',  # Common Linux path
+    '/usr/local/bin/tesseract',  # Alternative Linux path
+    'tesseract',  # System PATH
+    r'C:\Program Files\Tesseract-OCR\tesseract.exe',  # Windows fallback
+    r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',  # Windows fallback
 ]
 
 def configure_tesseract():
-    """Configure Tesseract path for Windows."""
-    # First try the forced path
-    if os.path.exists(r'C:\Program Files\Tesseract-OCR\tesseract.exe'):
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        logger.info(f"Tesseract configured at: C:\\Program Files\\Tesseract-OCR\\tesseract.exe")
+    """Configure Tesseract path for current environment."""
+    # Try to use tesseract from system PATH first (Linux/Codespaces)
+    import shutil
+    tesseract_cmd = shutil.which('tesseract')
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+        logger.info(f"Tesseract configured at: {tesseract_cmd}")
         return True
     
-    # Fall back to checking other paths
+    # Fall back to checking explicit paths
     for path in TESSERACT_PATHS:
         if os.path.exists(path):
             pytesseract.pytesseract.tesseract_cmd = path
             logger.info(f"Tesseract found at: {path}")
             return True
     
-    logger.warning("Tesseract not found in common paths. Please set pytesseract.pytesseract.tesseract_cmd manually.")
+    logger.warning("Tesseract not found in common paths. Please install tesseract-ocr package.")
     return False
 
 # Try to configure Tesseract on import
@@ -56,11 +55,13 @@ class ImageProcessor:
     @staticmethod
     def preprocess_image(image_path, output_path=None):
         """
-        Preprocess image for better OCR accuracy:
+        Enhanced preprocessing for better OCR accuracy:
+        - Resize image for better recognition
         - Convert to grayscale
-        - Apply denoising
-        - Adaptive thresholding (binarization)
-        - Deskew if needed
+        - Apply advanced denoising
+        - Enhance contrast
+        - Multiple binarization techniques
+        - Morphological operations
         """
         try:
             # Read image
@@ -68,18 +69,42 @@ class ImageProcessor:
             if img is None:
                 raise ValueError(f"Could not read image from {image_path}")
             
+            # Resize image if too small (OCR works better on larger images)
+            height, width = img.shape[:2]
+            if height < 300 or width < 300:
+                scale_factor = max(300/height, 300/width, 2.0)
+                new_width = int(width * scale_factor)
+                new_height = int(height * scale_factor)
+                img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+            
             # Convert to grayscale
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
-            # Apply denoising
-            denoised = cv2.medianBlur(gray, 3)
+            # Apply Gaussian blur to reduce noise
+            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
             
-            # Adaptive thresholding for binarization
-            binary = cv2.adaptiveThreshold(
-                denoised, 255, 
+            # Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(blurred)
+            
+            # Apply multiple binarization techniques and choose the best
+            # Method 1: Otsu's thresholding
+            _, binary_otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Method 2: Adaptive thresholding
+            binary_adaptive = cv2.adaptiveThreshold(
+                enhanced, 255, 
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 11, 2
+                cv2.THRESH_BINARY, 15, 3
             )
+            
+            # Use Otsu's method as it generally works better for product labels
+            binary = binary_otsu
+            
+            # Apply morphological operations to clean up the image
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
             
             # Optional: Deskew the image
             binary = ImageProcessor._deskew_image(binary)
@@ -147,34 +172,78 @@ class OCREngine:
     def __init__(self, lang='eng'):
         self.lang = lang
         # Configure Tesseract for better accuracy
-        self.config = '--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,:-₹Rs.()[]{}/%'
+        # PSM 6: Assume a single uniform block of text
+        # OEM 3: Use both legacy and LSTM OCR engines
+        self.config = '--oem 3 --psm 6'
     
     def extract_text_from_image(self, image_path, preprocess=True):
         """
-        Extract text from image using OCR
+        Extract text from image using multiple OCR configurations for best results
         """
         temp_file_path = None
         try:
-            if preprocess:
-                # Preprocess image for better OCR with better temp file handling
-                temp_file_path = tempfile.mktemp(suffix='.png')
-                processed_img = ImageProcessor.preprocess_image(image_path, temp_file_path)
-                
-                # Ensure file is closed before OCR
-                import time
-                time.sleep(0.1)  # Small delay to ensure file operations complete
-                
-                text = pytesseract.image_to_string(
-                    temp_file_path, lang=self.lang, config=self.config
-                )
-            else:
-                # Use original image
-                text = pytesseract.image_to_string(
-                    image_path, lang=self.lang, config=self.config
-                )
+            # Try multiple OCR configurations
+            configs = [
+                '--oem 3 --psm 6',  # Single uniform block
+                '--oem 3 --psm 4',  # Single text column
+                '--oem 3 --psm 8',  # Single word
+                '--oem 3 --psm 7',  # Single text line
+                '--oem 3 --psm 11', # Sparse text
+            ]
+            
+            best_text = ""
+            best_confidence = 0
+            
+            for config in configs:
+                try:
+                    if preprocess:
+                        # Preprocess image for better OCR
+                        if not temp_file_path:
+                            temp_file_path = tempfile.mktemp(suffix='.png')
+                            processed_img = ImageProcessor.preprocess_image(image_path, temp_file_path)
+                        
+                        # Extract text with current config
+                        text = pytesseract.image_to_string(
+                            temp_file_path, lang=self.lang, config=config
+                        )
+                        
+                        # Get confidence score
+                        try:
+                            data = pytesseract.image_to_data(temp_file_path, config=config, output_type=pytesseract.Output.DICT)
+                            confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
+                            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+                        except:
+                            avg_confidence = len(text.strip())  # Fallback to text length
+                            
+                    else:
+                        # Use original image
+                        text = pytesseract.image_to_string(
+                            image_path, lang=self.lang, config=config
+                        )
+                        try:
+                            data = pytesseract.image_to_data(image_path, config=config, output_type=pytesseract.Output.DICT)
+                            confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
+                            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+                        except:
+                            avg_confidence = len(text.strip())
+                    
+                    # Keep the best result
+                    if avg_confidence > best_confidence and text.strip():
+                        best_text = text
+                        best_confidence = avg_confidence
+                        
+                except Exception as e:
+                    logger.debug(f"OCR config {config} failed: {str(e)}")
+                    continue
+            
+            # If no good result, try without preprocessing as fallback
+            if not best_text.strip() and preprocess:
+                logger.info("Trying OCR without preprocessing as fallback")
+                return self.extract_text_from_image(image_path, preprocess=False)
             
             # Clean up the extracted text
-            cleaned_text = self._clean_text(text)
+            cleaned_text = self._clean_text(best_text)
+            logger.info(f"Best OCR result with confidence {best_confidence}: {cleaned_text[:100]}...")
             return cleaned_text
             
         except Exception as e:
@@ -223,27 +292,49 @@ class OCREngine:
     @staticmethod
     def _clean_text(text):
         """
-        Clean and normalize OCR output
+        Enhanced cleaning and normalization of OCR output
         """
         if not text:
             return ""
         
-        # Remove excessive whitespace
+        import re
+        
+        # First pass: basic cleaning
+        # Replace common OCR mistakes
+        text = text.replace('|', 'I')  # Common misreading
+        text = text.replace('0', 'O')  # In some contexts
+        text = text.replace('§', 'S')  # Special characters
+        text = text.replace('¢', 'C')
+        
+        # Fix common character confusions
+        text = re.sub(r'(\d)[oO](\d)', r'\1\2', text)  # Remove O between digits
+        text = re.sub(r'(\d)[lI](\d)', r'\1\2', text)  # Remove I/l between digits
+        
+        # Split into lines and process each
         lines = text.split('\n')
         cleaned_lines = []
         
         for line in lines:
-            # Strip whitespace and filter out very short lines
-            cleaned_line = line.strip()
-            if len(cleaned_line) > 1:  # Keep lines with more than 1 character
-                cleaned_lines.append(cleaned_line)
+            # Strip whitespace
+            line = line.strip()
+            
+            # Skip very short lines or lines with only special characters
+            if len(line) < 2 or re.match(r'^[^\w\d]*$', line):
+                continue
+                
+            # Remove isolated special characters at start/end
+            line = re.sub(r'^[^\w\d]+|[^\w\d]+$', '', line)
+            
+            # Keep lines that have meaningful content
+            if len(line) > 1 and any(c.isalnum() for c in line):
+                cleaned_lines.append(line)
         
-        # Join lines and normalize whitespace
+        # Join lines and final cleanup
         cleaned_text = '\n'.join(cleaned_lines)
         
-        # Remove multiple consecutive spaces
-        import re
+        # Normalize whitespace
         cleaned_text = re.sub(r' +', ' ', cleaned_text)
+        cleaned_text = re.sub(r'\n+', '\n', cleaned_text)
         
         return cleaned_text.strip()
 

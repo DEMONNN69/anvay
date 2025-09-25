@@ -1,9 +1,12 @@
 import { APIResponse, ComplianceResult } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost:8000/api';
+// Hardcoded for Codespaces presentation
+const API_BASE_URL = 'https://musical-acorn-v6vw59v9vjv3rpx-8000.app.github.dev/api';
 
 export const checkCompliance = async (file: File): Promise<APIResponse> => {
   try {
+    console.log('Making API request to:', `${API_BASE_URL}/check-compliance/`);
+    
     const formData = new FormData();
     formData.append('image', file);
 
@@ -15,8 +18,13 @@ export const checkCompliance = async (file: File): Promise<APIResponse> => {
       },
     });
 
+    console.log('Response status:', response.status);
+    console.log('Response ok:', response.ok);
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      console.error('Response error:', errorText);
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
     }
 
     const data = await response.json();
@@ -41,6 +49,12 @@ export const checkCompliance = async (file: File): Promise<APIResponse> => {
     };
   } catch (error) {
     console.error('API Error:', error);
+    
+    // More detailed error logging
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      console.error('Network error - check if backend is running and CORS is configured');
+    }
+    
     return {
       success: false,
       error: error instanceof Error ? error.message : 'An error occurred'
